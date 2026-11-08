@@ -2,8 +2,8 @@ name: Auto Sync Upstream
 
 on:
   schedule:
-    - cron: "0 0 * * *" # 每天北京时间早上 8:00（UTC 0点）自动运行
-  workflow_dispatch:     # 允许你在网页端手动点击按钮同步
+    - cron: "0 0 * * *"
+  workflow_dispatch:
 
 jobs:
   sync:
