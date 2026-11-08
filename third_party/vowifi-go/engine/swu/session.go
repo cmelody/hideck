@@ -328,6 +328,7 @@ type Session struct {
 	childDHSecret           []byte
 	pendingPeerRekey        *pendingPeerChildRekey
 	pendingRekeySPI         atomic.Uint32 // inbound SPI of pendingPeerRekey for the data path
+	childRekeyOmitDH        atomic.Bool   // the last no-PFS CHILD_SA rekey that worked left D-H out
 	lastCreateChildSAAnswer *createChildSAAnswer
 	childTSi                *ikev2.EncryptedPayloadTS
 	childTSr                *ikev2.EncryptedPayloadTS
@@ -842,18 +843,19 @@ func (s *Session) buildTransport(ctx context.Context) error {
 	return nil
 }
 
-func (s *Session) buildProxyTransport(host, port string) error {
+func (s *Session) proxyTransportConfig(remote string) ipsec.Socks5Config {
 	proxyCfg := ipsec.Socks5Config{}
 	if s.cfg.Proxy != nil {
 		proxyCfg = *s.cfg.Proxy
 	}
-	targetAddr := net.JoinHostPort(host, port)
-	proxyCfg.ProxyAddr = configuredProxyAddress(s.cfg)
+	proxyCfg.ProxyAddr, proxyCfg.RemoteAddr = configuredProxyAddress(s.cfg), remote
 	proxyCfg.Username, proxyCfg.Password = configuredProxyCredentials(s.cfg)
-	proxyCfg.RemoteAddr = targetAddr
-	proxyCfg.DNSServer = s.cfg.DNSServer
-	proxyCfg.DeviceID = s.cfg.DeviceID
-	transport, err := ipsec.NewSocks5Transport(proxyCfg)
+	proxyCfg.DNSServer, proxyCfg.DeviceID = s.cfg.DNSServer, s.cfg.DeviceID
+	return proxyCfg
+}
+
+func (s *Session) buildProxyTransport(host, port string) error {
+	transport, err := ipsec.NewSocks5Transport(s.proxyTransportConfig(net.JoinHostPort(host, port)))
 	if err != nil {
 		return fmt.Errorf("open SOCKS5 IKE transport: %w", err)
 	}

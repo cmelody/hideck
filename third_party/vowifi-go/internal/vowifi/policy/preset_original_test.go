@@ -10,7 +10,7 @@ import (
 
 func TestOriginalCarrierPresetAssetsRemainExact(t *testing.T) {
 	wantHashes := map[string]string{
-		"2degrees_nz_53024.yaml":   "40ba4fc4b21aed123cb5d2c3634a3a4a0d7d7a33046dd2e356e8950e6250c471",
+		"2degrees_nz_53024.yaml":   "e90a9605c10f3c69c79a3fce53ccfa5e0b80b0b4bbb43de6261997f740833a17",
 		"ais_th_52001.yaml":        "f02b536317933c00c1960bfcceaf1b3f2ec8e22e1106917854231953832ccaa0",
 		"ais_th_52003.yaml":        "7b7c444a9c641d19c9ea184997c27c24eacc52d6b31db729b448fe9e1f50d0fd",
 		"att_310280.yaml":          "7337399037af7fbe67874b83f8f0c95ff0a1c588ec49ee41a404cf33e04fd054",
@@ -19,7 +19,7 @@ func TestOriginalCarrierPresetAssetsRemainExact(t *testing.T) {
 		"cmhk_45413.yaml":          "c7bc2f772644f110cce24b1e49dedde1ddcf12d2420400e8b7bf39467e08e690",
 		"csl_454000.yaml":          "250f9ec40e6c6a4203a5f29063491317c96276753c42980dd37c491f7d3cfc56",
 		"cteuk_23433.yaml":         "52ec96bdca5e6e789862f47d9200eb5de3ddacd103c3374882898c8ec8b74517",
-		"dito_51566.yaml":          "0dc72630e458248d2c70c2d07ebe6b839fce3f98676c9d2eb2409855cbc67b91",
+		"dito_51566.yaml":          "529cb896a1cf83503c1d24fc5dec3416af668fb7f6bd20fc70fa2748103248ed",
 		"docomo_44010.yaml":        "19281f52cf4cbbdd6973be63704b7d9438088a4fefa5d6e96ec9c112286dacdb",
 		"ee_uk_23430.yaml":         "cae2b7373401f83ad468bdc4bee3129520d33cbaadcdda5b461d9011d427e0dc",
 		"ee_uk_23431.yaml":         "6ce981d9065cfcba1beb69385ffda4e3305aec6878fcc0ed3f3b9847f0176b5a",
@@ -47,9 +47,9 @@ func TestOriginalCarrierPresetAssetsRemainExact(t *testing.T) {
 		"three_uk_234020.yaml":     "49cf6d64d8e180ff475e28718f70f6bdf6da1b388fdd8996cc6921d8e3d6d9c3",
 		"tmobile_310240.yaml":      "bed3bfcb871282eab4c446004c1837c39426aa94e1206ab18c41f52aa82c4cb1",
 		"tmobile_310260.yaml":      "57619113de3cfbe9ddb4afda13885501415f534f580fc55a8e7f54a15f2b93a6",
-		"vodafone_de_26202.yaml":   "3ad3ae5e4371c7436521e357e782acdef7dc8b6fee1e5574834d7be706347ab6",
+		"vodafone_de_26202.yaml":   "6881882fa8e11ecbbaa3f4d44b1bc8d7f16deba34a08f4d7d53268e96b7ab2a6",
 		"vodafone_nl_20404.yaml":   "ca847e87abe516603cd92f05ef0a9e5ba8ad0869f7cca3ea2aabe9f49694df8b",
-		"vodafone_uk_23415.yaml":   "d40342f17a7f665d0c07e127c7cd057d70f4b48ce22da8ef03eb9c07e114fc22",
+		"vodafone_uk_23415.yaml":   "4a83ec1b4d83d853d627b008cdc40ecfc40fd521dd183e303c74b5e79df12808",
 		"ymobile_44000.yaml":       "6804965637e8d5d279b9a2eeb6a2dcd5ecd01bd8b4745ee7a5486b17d1c30c72",
 	}
 	entries, err := carrierPresetFiles.ReadDir("presets")

@@ -2,6 +2,7 @@ package imscore
 
 import (
 	"strings"
+	"time"
 
 	"github.com/iniwex5/vowifi-go/internal/vowifi/logging"
 )
@@ -15,6 +16,9 @@ const (
 	smsReadyReasonSMSCNotConfigured = "IMS SMSC is not configured"
 	smsReadyReasonAwaitingDownlink  = "IMS registered; SMS reception awaiting downlink verification"
 	smsReadyReasonRegistrationFlow  = "IMS SMS receiver verified on registered TCP flow"
+	smsReadyReasonPortSAwaitingPeer = "IMS registered; port-s closed or timed out, awaiting the P-CSCF reconnect"
+	smsReadyReasonAwaitingPeerPortS = "IMS SMS receiver ready; port-s timed out, P-CSCF reconnects on demand"
+	smsReadyReasonProbingPortS      = "IMS SMS receiver ready; port-s timed out, REGISTER probing the P-CSCF"
 )
 
 type smsHealthInput struct {
@@ -32,16 +36,23 @@ func (s *Service) SMSReadiness() SMSReadiness {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	registered := s.regState == regRegistered
+	protectedPushRequired := s.protectedSMSPushRequiredLocked()
+	portS := s.capturePortSSession()
+	// A periodic REGISTER in flight keeps the binding it refreshes.
+	probeGrace := protectedPushRequired && s.timeoutProbeGraceLocked(portS) &&
+		(registered || s.bindingLiveDuringRegisterLocked(time.Now()))
+	if probeGrace {
+		registered = true
+	}
 	profileReady := registered && s.regSession != nil &&
 		strings.TrimSpace(s.regSession.publicID) != "" &&
 		strings.TrimSpace(s.regSession.contactUser) != ""
 	transportReady := registered && s.registeredSIPTransportReadyLocked()
 	baseReceiverReady := s.smsReceiverReady
 	receiverReady := baseReceiverReady
-	protectedPushRequired := s.protectedSMSPushRequiredLocked()
 	registrationSMSProven := s.registrationSMSProvenLocked()
 	awaitingEvidence := !s.smsReception.failed && s.smsReception.peer == nil
-	if protectedPushRequired {
+	if protectedPushRequired && !probeGrace {
 		receiverReady = receiverReady && (s.portSPushReady.Load() || registrationSMSProven)
 	}
 	smsc := ""
@@ -49,7 +60,6 @@ func (s *Service) SMSReadiness() SMSReadiness {
 		smsc = s.cfg.SMSC
 	}
 	readiness := evaluateSMSReadiness(registered, profileReady, transportReady, receiverReady, smsc)
-	portS := s.capturePortSSession()
 	readiness.HealthReady = readiness.Ready || smsReceiverHealthReady(smsHealthInput{
 		readiness: readiness, baseReceiverReady: baseReceiverReady,
 		protectedPushRequired: protectedPushRequired, portS: portS,
@@ -62,8 +72,40 @@ func (s *Service) SMSReadiness() SMSReadiness {
 	}
 	if readiness.Ready && registrationSMSProven {
 		readiness.Reason = smsReadyReasonRegistrationFlow
+	} else if readiness.Ready && !s.portSPushReady.Load() && s.awaitingPeerAfterTimeout() {
+		readiness.Reason = smsReadyReasonAwaitingPeerPortS
+	} else if readiness.Ready && probeGrace {
+		readiness.Reason = smsReadyReasonProbingPortS
+	}
+	if !readiness.Ready && readiness.SMSCPresent && !s.smsReception.reportFailed &&
+		strings.EqualFold(portS.closedRegistrar, strings.TrimSpace(s.registrar)) && portSAwaitingPeer(smsHealthInput{
+		readiness: readiness, baseReceiverReady: baseReceiverReady,
+		protectedPushRequired: protectedPushRequired, portS: portS,
+	}) {
+		readiness.Reason = smsReadyReasonPortSAwaitingPeer
 	}
 	return readiness
+}
+
+// portSAwaitingPeer reports a registration whose only missing piece is a
+// port-s the P-CSCF closed (EOF) or that timed out. TS 33.203 7.1 has the
+// P-CSCF reopen it before its next request, so this only changes the reason;
+// readiness and health stay as they are.
+func portSAwaitingPeer(input smsHealthInput) bool {
+	kind := input.portS.lastCloseKind
+	return input.readiness.Registered && input.readiness.ProfileReady &&
+		input.readiness.TransportReady && input.baseReceiverReady &&
+		input.protectedPushRequired && !input.portS.connected && input.portS.generation > 0 &&
+		(kind == portSCloseEOF || kind == portSCloseTimeout) &&
+		!input.portS.closedAt.Before(input.portS.openedAt) && !input.portS.timeoutValidationFailed
+}
+
+// bindingLiveDuringRegisterLocked reports a REGISTER in flight on a binding
+// that has not expired yet. The caller holds mu.
+func (s *Service) bindingLiveDuringRegisterLocked(now time.Time) bool {
+	return (s.regState == regRegistering || s.regState == regReregister) &&
+		s.regSession != nil && s.regSession.expires > 0 && !s.lastRegisterOKAt.IsZero() &&
+		now.Before(s.lastRegisterOKAt.Add(s.regSession.expires))
 }
 
 func smsReceiverHealthReady(input smsHealthInput) bool {
@@ -76,6 +118,7 @@ func smsReceiverHealthReady(input smsHealthInput) bool {
 
 func (s *Service) protectedSMSPushRequiredLocked() bool {
 	return !s.externalTransport && !s.canAwaitOnDemandPortS() && !s.portSTimeoutDownlinkProven() &&
+		!s.awaitingPeerAfterTimeout() &&
 		s.regSession != nil &&
 		s.regSession.security != nil &&
 		strings.TrimSpace(s.regSession.security.verifyHeader) != ""

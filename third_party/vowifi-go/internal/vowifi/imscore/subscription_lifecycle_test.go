@@ -121,6 +121,21 @@ func TestSubscriptionRejectionExpiryAllowsRetryWithoutServiceRestart(t *testing.
 	}
 }
 
+func TestCarrierPolicySkipsMWISubscription(t *testing.T) {
+	s := newSubscriptionLifecycleTestService(t, nil)
+	s.cfg.RegisterTemplate.DisableMWISubscription = true
+	s.startMWISubscription()
+	s.mu.RLock()
+	started := s.mwiSubscriptionLifecycle.started
+	s.mu.RUnlock()
+	if started || s.mwiSubscriptionInFlight.Load() {
+		t.Fatal("carrier policy did not stop SUBSCRIBE(mwi)")
+	}
+	if start, reason := s.prepareSubscriptionStart(false); !start {
+		t.Fatalf("carrier MWI policy blocked registration event subscription: %s", reason)
+	}
+}
+
 func TestRegisteredSubscriptionDialogSurvivesRegisterRefresh(t *testing.T) {
 	s := newSubscriptionLifecycleTestService(t, nil)
 	for _, mwi := range []bool{false, true} {
@@ -236,8 +251,7 @@ func storeMWIRejection(s *Service) int {
 }
 
 func Test2degreesMWIRejectionDoesNotChangeOnDemandSMSReadiness(t *testing.T) {
-	s := newSubscriptionLifecycleTestService(t, nil)
-	s.cfg.CarrierPresetID = "2degrees_nz_53024"
+	s := newSubscriptionLifecycleTestServiceForPreset(t, nil, "2degrees_nz_53024")
 	rejectSubscriptionForTest(t, s, true)
 	push, peer := net.Pipe()
 	t.Cleanup(func() { _ = push.Close(); _ = peer.Close() })

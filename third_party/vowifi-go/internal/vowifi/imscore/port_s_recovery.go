@@ -104,6 +104,46 @@ func (s *Service) clearPortSRecoveryDeadline() {
 	s.portSWatchMu.Unlock()
 }
 
+// enterPortSTimeoutAwait stops REGISTER-driven recovery after a timed-out
+// port-s once canAwaitPeerAfterTimeout holds. Periodic refreshes continue.
+// generation is the port-s generation when the recovery REGISTER was sent; a
+// reopen since then belongs to a newer episode whose recovery must not be
+// cancelled by this older completion.
+// protectedConnMu serializes this with handleProtectedServerPushClosed.
+func (s *Service) enterPortSTimeoutAwait(generation uint64) bool {
+	s.protectedConnMu.Lock()
+	session := s.capturePortSSession()
+	if len(s.protectedConns) > 0 || session.generation != generation || !s.canAwaitPeerAfterTimeout() {
+		s.protectedConnMu.Unlock()
+		return false
+	}
+	s.portSWatchMu.Lock()
+	failures := s.portSBackoff.failures
+	s.portSWatchMu.Unlock()
+	s.resetPortSRecoveryBackoff()
+	s.portSMissingAfterRegister.Store(false)
+	first := !s.portSTimeoutAwaitEntered.Swap(true)
+	s.protectedConnMu.Unlock()
+	if first {
+		logging.Info("IMS port-s timed out; REGISTER succeeded, awaiting peer reconnect",
+			"device", s.DeviceID(), "pcscf", s.currentPortSRecoveryRegistrar(),
+			"close_kind", session.lastCloseKind, "since_close", time.Since(session.closedAt).Round(time.Second),
+			"port_s_generation", session.generation,
+			"peer_reconnect_observed", s.portSOnDemandObserved.Load(),
+			"backoff_failures", failures,
+			"outbound", s.sipOutboundFlow.Load(),
+			"carrier_preset", strings.TrimSpace(s.cfg.CarrierPresetID))
+	} else {
+		logging.Info("IMS REGISTER succeeded while awaiting peer port-s after timeout; still awaiting",
+			"device", s.DeviceID(), "cseq", s.cseq.Load(), "status", s.lastSIPCode.Load(),
+			"since_close", time.Since(session.closedAt).Round(time.Second),
+			"port_s_generation", session.generation,
+			"peer_reconnect_observed", s.portSOnDemandObserved.Load(),
+			"carrier_preset", strings.TrimSpace(s.cfg.CarrierPresetID))
+	}
+	return true
+}
+
 // generation is the port-s generation the caller saw with no connection open.
 func (s *Service) backoffMissingPortSAfterRegister(generation uint64) {
 	if s.capturePortSSession().generation != generation {
@@ -124,6 +164,8 @@ func (s *Service) backoffMissingPortSAfterRegister(generation uint64) {
 			"IMS port-s REGISTER recovery did not restore downlink; schedule P-CSCF replacement after backoff",
 			"device", s.DeviceID(), "pcscf", s.currentPortSRecoveryRegistrar(),
 			"failures", backoff.failures, "retry_at", backoff.retryAt)
+		// Readiness no longer reports this port-s as awaiting the peer.
+		s.notifySMSReadiness()
 	}
 	s.schedulePortSReconnectWatchAt(backoff.retryAt)
 	logging.WarnRate("ims-ports-recovery-no-flow-"+s.DeviceID(), 30*time.Second,

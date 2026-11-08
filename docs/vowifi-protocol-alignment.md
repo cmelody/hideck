@@ -76,7 +76,7 @@
 - 新的对话内 SUBSCRIBE 在分派前保留递增 CSeq，失败也不复用；同一 SIP 事务重传仍使用原请求。电话 ACK/CANCEL 的序号处理不受影响，见 [RFC 3261 §12.2.1.1](https://www.rfc-editor.org/rfc/rfc3261.html#section-12.2.1.1)。
 - `active` / `pending` NOTIFY 的 `expires` 是有效期依据；后到的 200 不覆盖同次尝试已收到的 NOTIFY 有效期，0 不回退为正数。可恢复刷新失败保留原协商到期时间，订阅终止类响应则结束该 usage。
 - 初始、刷新和取消订阅在出队发送时启动 `Timer N = 64 × T1`，收到匹配 NOTIFY 后取消。定时器到期只结束订阅并记录错误，不清除 IMS/SMS 就绪状态、不触发 runtime 重建。主动取消后保留最终 NOTIFY 的接收窗口，不自动恢复该订阅。
-- `terminated;reason=deactivated/timeout` 可立即以新对话重订阅；`probation/giveup` 和其他原因遵守有效的 `retry-after`；`rejected/noresource/invariant` 不自动重订阅。MWI 405/489 的身份级拒绝记录仍优先，普通 REGISTER 刷新和 EOF 不能绕过。未给出重试时间时沿用原有订阅周期重试间隔，这是本地调度策略，不是 RFC 规定的固定重试时长。
+- `terminated;reason=deactivated/timeout` 可立即以新对话重订阅；`probation/giveup` 和其他原因遵守有效的 `retry-after`；`rejected/noresource/invariant` 不自动重订阅。MWI 405/489 的身份级拒绝记录仍优先，普通 REGISTER 刷新和 EOF 不能绕过。未给出重试时间时按本地失败退避：`reg` 30 秒、1、2、4 分钟，之后每 5 分钟；MWI 5、10、20 分钟，之后每 30 分钟。可恢复的 SUBSCRIBE 失败和 Timer N 到期同样适用。这是本地调度策略，不是 RFC 规定的固定重试时长；网络给出的 `Retry-After` / `retry-after` 是下限，见 TS 24.229 §5.1.2.2。失败次数按身份和事件包记录，跨 Service 重建保留、不持久化，只有匹配的 `active/pending` NOTIFY 清零本地退避，未到期的网络等待保留；失败的尝试还在等重试时，仍有效的旧订阅发来的 NOTIFY 不清零。同一个 SUBSCRIBE 事务超时后又遇到 Timer N 到期，只计一次失败。重新完成初始注册后 `reg` 按 TS 24.229 §5.1.1.3 立即订阅一次，再失败接着退避；MWI 继续等待，其 `rejected/noresource/invariant` 也跨重新注册保留。回归入口：`subscription_retry_backoff_test.go`。
 - `reg` / MWI 各自记录订阅代次：终止或到期会使旧代次失效，构建中、排队中的旧请求不得继续发送，晚到响应不得覆盖终止状态、新对话或暂停期限。有效的 481 重订阅显式使用新代次；普通 `active/pending` 更新不会使请求失效，也不丢弃同一 IMS 注册下已接纳的 NOTIFY 正文。回归入口：`subscription_attempt_race_test.go`。
 - 订阅本身终止与 reginfo 报告当前 Contact 注销是不同事件；后者在确认属于当前上下文后仍进入原来的 IMS 注册恢复流程。
 - 已接纳的 NOTIFY 正文按接收顺序处理，不能因后一条到达而丢弃前一条 reginfo 增量，见 [RFC 3680 §5.2](https://www.rfc-editor.org/rfc/rfc3680.html#section-5.2)。`reg` / MWI 队列独立，旧注册上下文的正文仍被隔离；重复通知和重复回调不重复应用。先尝试回复 SIP，再处理正文；回复写失败仍向调用方返回原错误，但不会丢弃已接纳的状态或阻塞后续通知。回归入口：`subscription_notify_queue_test.go`、`subscription_notify_reply_test.go`。
@@ -108,6 +108,16 @@
 - 有效 UDP 下行请求同样可证明当前代次的下行已可用；仅绑定 UDP 端口或收到 REGISTER 响应不算证明。关闭、替换、超时切换提交与下行证据按代次隔离；退役 socket 的迟到数据或错误不可验证、破坏新路径。
 - `ipsec_generation`、`previous_ipsec` 和 `last_unknown_inbound` 记录当前/上一套安全关联的标识及最后一个未知 ESP 包的来源、目标、SPI、序号和时间；跨 runtime 可通过 `IMS security association identifiers` 日志关联。未知 SPI 的头部只是未验证观测，不代表短信到达。诊断不保存密钥或短信正文，安装失败保留原有安全关联，成功安装原子替换。
 - 回归入口：`protected_udp_test.go`、`registrar_downlink_tunnel_test.go`、`udp_security_test.go`、`ipsec_lifecycle_test.go`。本次没有真卡部署验收，不能据此认定本次 VOXI 故障一定由 UDP 或旧 SPI 引起。
+
+## 系统 IMS 监听器的 MPTCP / MSS 兼容
+
+Linux 的 `SystemIMSNetwork` 先沿用 Go 的 MPTCP 选择（包括 `GODEBUG=multipathtcp`），再对实际 MPTCP 监听 socket 设置 IMS 所需的 `TCP_MAXSEG=1100`。成功则保留原监听器；只有该操作返回 `EOPNOTSUPP` 时，才关闭尚未用于注册的监听器，以普通 TCP 重新监听，并记录 `IMS MPTCP listener cannot set TCP_MAXSEG; retrying with TCP` 警告。不按内核版本推断支持情况，也不修改系统 MPTCP 开关。
+
+能力检查中的其他错误、关闭失败、普通 TCP 重建失败，以及后续 MSS 设置失败都会返回给调用方。普通 TCP、非 Linux 平台和用户态网络适配器保持各自原有路径。此检查只证明监听器支持 MSS，不代表已验证运营商的 MPTCP 多路径互通。
+
+需要禁用这项自动重试、保留原始错误进行诊断时，创建网络适配器后、使用前设置 `network.DisableMPTCPMSSFallback = true`；这是 `SystemIMSNetwork` 的代码级选项，不是 YAML 配置项。回归入口：`network_tcp_linux_test.go`（兼容/不兼容 MPTCP、非兼容性错误、系统实际 socket 选择、禁用重试）和 `tcp_mss_unix_test.go`。
+
+`network_tcp_connection_linux_test.go` 另外检查 IPv4/IPv6 的实际 MPTCP 协商、接受连接上的 MSS 和双向数据传输。2026-10-28 在 Linux 5.18 的 179 主机上验证了不支持 MSS 时使用 TCP；在官方 Ubuntu Linux 7.0.0-42 内核的隔离 QEMU 虚拟机中验证了保留 MPTCP，双方 `MultipathTCP()` 均为 true。测试使用真实内核 socket，但没有验证多条子流、跨网切换或运营商互通。179 的 IMS 全包 699 项通过；新内核虚拟机的 MPTCP/原六项专项通过，全包仍有短时限测试超时，不能标为全包通过。
 
 ## 验证边界
 
