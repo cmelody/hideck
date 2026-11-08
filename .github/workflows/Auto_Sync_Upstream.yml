@@ -18,8 +18,14 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/yibaiba/hideck.git
+          git remote add upstream https://github.com/morluto/rea.git
           git fetch upstream
           git checkout main || git checkout master
+          
+          # 先把远端可能存在的改动拉取并合并，防止非快进错误
+          git pull origin main --rebase || true
+          
           git merge upstream/main || git merge upstream/master
-          git push origin HEAD
+          
+          # 使用 --force 强制推送到你的远程仓库
+          git push origin HEAD --force
